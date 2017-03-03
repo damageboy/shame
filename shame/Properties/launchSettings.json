@@ -1,0 +1,9 @@
+{
+  "profiles": {
+    "shame": {
+      "commandName": "Project",
+      "commandLineArgs": "knucleotide-input25000000.txt",
+      "workingDirectory": "C:\\temp\\shame\\shame\\bin\\Release\\netcoreapp1.1"
+    }
+  }
+}
