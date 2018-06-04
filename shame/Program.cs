@@ -7,17 +7,14 @@
 
 using System;
 using System.IO;
-using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using shame;
 
 public class Program
 {
-    public unsafe static void Main(string[] args)
+    public static unsafe void Main(string[] args)
     {
         PrepareLookups();
         var buffer = GetBytesForThirdSequence(args);
@@ -37,38 +34,26 @@ public class Program
         }
 
         //var fragmentLengths = new[] { 1 };
-        var prm =
-        (
+        var prm = (
             from chunk in Enumerable.Range(0, procs)
             from fl in new[] { 1, 2, 3, 4, 6, 12, 18 }
-            select new {
-                O = GetBufferOffset(chunk, fl),
-                L = bufferLengths[chunk],
-                FL = fl
-            }).ToArray();
+            select (O: GetBufferOffset(chunk, fl), L: bufferLengths[chunk], FL: fl)).ToArray();
 
-        var res =
-        (from param in prm.AsParallel()
-            select new
-            {
-                param.FL,
-                D = CountFrequency(p + param.O, param.L, param.FL),
-            }).ToArray();
+        var res = (
+            from param in prm.AsParallel()
+            select (FL: param.FL, D: CountFrequency(p + param.O, param.L, param.FL))).ToArray();
 
-        var x1 = (from r in res
+        var x1 = (
+            from r in res
             group r by r.FL
             into g
-            select new
-            {
-                FL = g.Key,
-                SD = g.Select(x => x.D).ToArray(),
-            }).ToArray();
+            select (FL: g.Key, SD: g.Select(x => x.D).ToArray())).ToArray();
 
         //var x2 = x1.OrderBy(x => x.FL);
         var dicts = (from x in x1.AsParallel()
                      select MergeDictionaries(x.SD)).ToArray();
 
-        int buflen = dicts[0].Values.Sum();
+        var buflen = dicts[0].Sum(e => e.Value);
         WriteFrequencies(dicts[0], buflen, 1);
         WriteFrequencies(dicts[1], buflen, 2);
         WriteCount(dicts[2], "GGT");
@@ -78,10 +63,10 @@ public class Program
         WriteCount(dicts[6], "GGTATTTTAATTTATAGT");
     }
 
-    static SuperDictionary<ulong, int> MergeDictionaries(SuperDictionary<ulong, int>[] splitdicts)
+    static SuperDictionary<ulong, int> MergeDictionaries(SuperDictionary<ulong, int>[] splitDicts)
     {
         var d = new SuperDictionary<ulong, int>();
-        foreach (var sd in splitdicts)
+        foreach (var sd in splitDicts)
             foreach (var kvp in sd)
                 d[kvp.Key] += kvp.Value;
 
@@ -90,11 +75,11 @@ public class Program
 
     static void WriteFrequencies(SuperDictionary<ulong, int> freq, int buflen, int fragmentLength)
     {
-        double percent = 100.0 / (buflen - fragmentLength + 1);
-        foreach (var line in (from k in freq.Keys
-            orderby freq[k] descending
-            select string.Format("{0} {1:f3}", PrintKey(k, fragmentLength),
-                (freq.ContainsKey(k) ? freq[k] : 0) * percent)))
+        var percent = 100.0 / (buflen - fragmentLength + 1);
+        foreach (var line in (from e in freq
+            orderby e.Key descending
+            select string.Format("{0} {1:f3}", PrintKey(e.Key, fragmentLength),
+                (freq.ContainsKey(e.Key) ? e.Value : 0) * percent)))
             Console.WriteLine(line);
         Console.WriteLine();
     }
@@ -103,22 +88,20 @@ public class Program
     {
         ulong key = 0;
         var keybytes = Encoding.ASCII.GetBytes(fragment.ToLower());
-        for (int i = 0; i < keybytes.Length; i++)
-        {
+        for (var i = 0; i < keybytes.Length; i++) {
             key <<= 2;
             key |= tonum[keybytes[i]];
         }
-        int w;
+
         Console.WriteLine("{0}\t{1}",
-            dictionary.TryGetValue(key, out w) ? w : 0,
+            dictionary.TryGetValue(key, out var w) ? w : 0,
             fragment);
     }
 
     static string PrintKey(ulong key, int fragmentLength)
     {
-        char[] items = new char[fragmentLength];
-        for (int i = 0; i < fragmentLength; ++i)
-        {
+        var items = new char[fragmentLength];
+        for (var i = 0; i < fragmentLength; ++i) {
             items[fragmentLength - i - 1] = tochar[key & 0x3];
             key >>= 2;
         }
@@ -131,18 +114,15 @@ public class Program
         ulong rollingKey = 0;
         ulong mask = 0;
         int cursor;
-        for (cursor = 0; cursor < fragmentLength - 1; cursor++)
-        {
+        for (cursor = 0; cursor < fragmentLength - 1; cursor++) {
             rollingKey <<= 2;
             rollingKey |= tonum[buffer[cursor]];
             mask = (mask << 2) + 3;
         }
         mask = (mask << 2) + 3;
-        int stop = length;
-        int w;
-        byte cursorByte;
-        while (cursor < stop)
-        {
+        var stop = length;
+        while (cursor < stop) {
+            byte cursorByte;
             if ((cursorByte = buffer[cursor++]) < (byte)'a')
                 cursorByte = buffer[cursor++];
             rollingKey = ((rollingKey << 2) & mask) | tonum[cursorByte];
@@ -159,7 +139,7 @@ public class Program
         var buffer = new byte[buffersize];
         int amountRead, threebuflen, indexOfFirstByteInThreeSequence, indexOfGreaterThan, threepos, tocopy;
         amountRead = threebuflen = indexOfFirstByteInThreeSequence = indexOfGreaterThan = threepos = tocopy = 0;
-        bool threeFound = false;
+        var threeFound = false;
         var source = args.Length == 1 ? (Stream) File.OpenRead(args[0]) : new BufferedStream(Console.OpenStandardInput());
         while (!threeFound && (amountRead = source.Read(buffer, 0, buffersize)) > 0)
         {
@@ -182,7 +162,7 @@ public class Program
             else
                 threepos += amountRead;
         }
-        int toread = threebuflen - tocopy;
+        var toread = threebuflen - tocopy;
         source.Read(threebuffer, tocopy, toread);
         return threebuffer;
     }
