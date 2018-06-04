@@ -6,6 +6,7 @@
  */
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -54,14 +55,21 @@ public class Program
                      select MergeDictionaries(x.SD)).ToArray();
 
         var buflen = dicts[0].Sum(e => e.Value);
+
         WriteFrequencies(dicts[0], buflen, 1);
         WriteFrequencies(dicts[1], buflen, 2);
+
         WriteCount(dicts[2], "GGT");
         WriteCount(dicts[3], "GGTA");
         WriteCount(dicts[4], "GGTATT");
         WriteCount(dicts[5], "GGTATTTTAATT");
         WriteCount(dicts[6], "GGTATTTTAATTTATAGT");
+
+#if VERIFY
+        AssertResults(dicts);
+#endif
     }
+
 
     static SuperDictionary<ulong, int> MergeDictionaries(SuperDictionary<ulong, int>[] splitDicts)
     {
@@ -77,8 +85,8 @@ public class Program
     {
         var percent = 100.0 / (buflen - fragmentLength + 1);
         foreach (var line in (from e in freq
-            orderby e.Key descending
-            select string.Format("{0} {1:f3}", PrintKey(e.Key, fragmentLength),
+            orderby e.Value descending
+            select string.Format("{0} {1:f3}", GetKeyAsString(e.Key, fragmentLength),
                 (freq.ContainsKey(e.Key) ? e.Value : 0) * percent)))
             Console.WriteLine(line);
         Console.WriteLine();
@@ -98,7 +106,7 @@ public class Program
             fragment);
     }
 
-    static string PrintKey(ulong key, int fragmentLength)
+    static string GetKeyAsString(ulong key, int fragmentLength)
     {
         var items = new char[fragmentLength];
         for (var i = 0; i < fragmentLength; ++i) {
@@ -108,6 +116,17 @@ public class Program
         return new string(items);
     }
 
+    static ulong GetKeyAsUlong(string key)
+    {
+        key = key.ToLower();
+        ulong rollingKey = 0;
+        for (var i = 0; i < key.Length; i++) {
+            rollingKey <<= 2;
+            rollingKey |= tonum[key[i]];
+        }
+
+        return rollingKey;
+    }
     static unsafe SuperDictionary<ulong, int> CountFrequency(byte *buffer, int length, int fragmentLength)
     {
         var dictionary = new SuperDictionary<ulong, int>();
@@ -180,4 +199,57 @@ public class Program
         tochar[2] = 'G';
         tochar[3] = 'T';
     }
+#if VERIFY
+    static void AssertResults(SuperDictionary<ulong, int>[] dicts)
+    {
+        var expectedDicts = new[]
+        {
+            new Dictionary<string, int>()
+            {
+                {"T", 37688130},
+                {"G", 24693096},
+                {"C", 24749421},
+                {"A", 37869353},
+
+            },
+
+            new Dictionary<string, int>()
+            {
+                {"TT", 11364196},
+                {"TG", 7445440},
+                {"TC", 7463353},
+                {"TA", 11415139},
+                {"GT", 7446336},
+                {"GG", 4877909},
+                {"GC", 4888588},
+                {"GA", 7480263},
+                {"CT", 7464238},
+                {"CG", 4885915},
+                {"CC", 4896659},
+                {"CA", 7502608},
+                {"AT", 11413359},
+                {"AG", 7483832},
+                {"AC", 7500819},
+                {"AA", 11471342},
+            },
+
+            new Dictionary<string, int>() {{"GGT", 1471758}},
+            new Dictionary<string, int>() {{"GGTA", 446535}},
+            new Dictionary<string, int>() {{"GGTATT", 47336}},
+            new Dictionary<string, int>() {{"GGTATTTTAATT", 893}},
+            new Dictionary<string, int>() {{"GGTATTTTAATTTATAGT", 893}},
+        };
+
+
+        foreach (var t in expectedDicts.Zip(dicts, (e, d) => (e, d)))
+        foreach (var e in t.e)
+        {
+            var key = GetKeyAsUlong(e.Key);
+            var count = t.d[key];
+            if (e.Value != count)
+                Console.WriteLine($"Expected to see count {e.Value} for key \"{e.Key}\" but got {count} instead");
+
+        }
+    }
+#endif
 }
