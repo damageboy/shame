@@ -7,25 +7,37 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using shame;
 
-public class Program
+public unsafe class Program
 {
     public static unsafe void Main(string[] args)
     {
+#if PROFILE
+		long startTicks, readDataTicks, preProcessTicks, countFreqTicks, mergeDictsTicks, endTicks;
+        startTicks = Stopwatch.GetTimestamp();
+#endif
+
         PrepareLookups();
         var buffer = GetBytesForThirdSequence(args);
-        var l = buffer.Length;
-        var p = (byte *) GCHandle.Alloc(buffer, GCHandleType.Pinned).AddrOfPinnedObject().ToPointer();
+#if PROFILE
+        readDataTicks = Stopwatch.GetTimestamp();
+#endif
+        var p = PreprocessBuffer(buffer, out var len);
+
+#if PROFILE
+        preProcessTicks = Stopwatch.GetTimestamp();
+#endif
         var procs = Environment.ProcessorCount / 2;
 
-        var bufferLengths = Enumerable.Repeat(l / procs, procs).ToArray();
-        bufferLengths[procs - 1] += l % procs;
-        var bufferOffsets = Enumerable.Range(0, procs).Select(i => i * (l / procs)).ToArray();
+        var bufferLengths = Enumerable.Repeat(len / procs, procs).ToArray();
+        bufferLengths[procs - 1] += len % procs;
+        var bufferOffsets = Enumerable.Range(0, procs).Select(i => i * (len / procs)).ToArray();
 
         int GetBufferOffset(int c, int fl)
         {
@@ -34,15 +46,18 @@ public class Program
             return bufferOffsets[c] - (fl - 1);
         }
 
-        //var fragmentLengths = new[] { 1 };
         var prm = (
             from chunk in Enumerable.Range(0, procs)
             from fl in new[] { 1, 2, 3, 4, 6, 12, 18 }
             select (O: GetBufferOffset(chunk, fl), L: bufferLengths[chunk], FL: fl)).ToArray();
 
         var res = (
-            from param in prm.AsParallel()
+            from param in prm.AsParallel()//.WithDegreeOfParallelism(procs)
             select (FL: param.FL, D: CountFrequency(p + param.O, param.L, param.FL))).ToArray();
+
+#if PROFILE
+        countFreqTicks = Stopwatch.GetTimestamp();
+#endif
 
         var x1 = (
             from r in res
@@ -54,6 +69,9 @@ public class Program
         var dicts = (from x in x1.AsParallel()
                      select MergeDictionaries(x.SD)).ToArray();
 
+#if PROFILE
+        mergeDictsTicks = Stopwatch.GetTimestamp();
+#endif
         var buflen = dicts[0].Sum(e => e.Value);
 
         WriteFrequencies(dicts[0], buflen, 1);
@@ -65,18 +83,153 @@ public class Program
         WriteCount(dicts[5], "GGTATTTTAATT");
         WriteCount(dicts[6], "GGTATTTTAATTTATAGT");
 
+#if PROFILE
+        endTicks = Stopwatch.GetTimestamp();
+#endif
+
 #if VERIFY
         AssertResults(dicts);
+
+        static void AssertResults(SuperDictionary<ulong, int>[] dicts)
+        {
+            var expectedDicts = new[]
+            {
+                new Dictionary<string, int>()
+                {
+                    {"T", 37688130},
+                    {"G", 24693096},
+                    {"C", 24749421},
+                    {"A", 37869353},
+
+                },
+
+                new Dictionary<string, int>()
+                {
+                    {"TT", 11364196},
+                    {"TG", 7445440},
+                    {"TC", 7463353},
+                    {"TA", 11415139},
+                    {"GT", 7446336},
+                    {"GG", 4877909},
+                    {"GC", 4888588},
+                    {"GA", 7480263},
+                    {"CT", 7464238},
+                    {"CG", 4885915},
+                    {"CC", 4896659},
+                    {"CA", 7502608},
+                    {"AT", 11413359},
+                    {"AG", 7483832},
+                    {"AC", 7500819},
+                    {"AA", 11471342},
+                },
+
+                new Dictionary<string, int>() {{"GGT", 1471758}},
+                new Dictionary<string, int>() {{"GGTA", 446535}},
+                new Dictionary<string, int>() {{"GGTATT", 47336}},
+                new Dictionary<string, int>() {{"GGTATTTTAATT", 893}},
+                new Dictionary<string, int>() {{"GGTATTTTAATTTATAGT", 893}},
+            };
+
+
+            foreach (var t in expectedDicts.Zip(dicts, (e, d) => (e, d)))
+            foreach (var e in t.e)
+            {
+                var key = GetKeyAsUlong(e.Key);
+                var count = t.d[key];
+                if (e.Value != count)
+                    Console.WriteLine($"Expected to see count {e.Value} for key \"{e.Key}\" but got {count} instead");
+
+            }
+        }
+#endif
+
+#if PROFILE
+        PrintTimes();
+
+        void PrintTimes()
+        {
+            endTicks -= startTicks;
+            mergeDictsTicks -= countFreqTicks;
+            countFreqTicks -= preProcessTicks;
+            preProcessTicks -= readDataTicks;
+            readDataTicks -= startTicks;
+
+            long ToUsec(long ticks) => ticks * 1_000_000 / Stopwatch.Frequency;
+
+            Console.WriteLine($"Entire program took: {ToUsec(endTicks):N0}us");
+            Console.WriteLine($"Reading data took: {ToUsec(readDataTicks):N0}us");
+            Console.WriteLine($"Pre processing took: {ToUsec(preProcessTicks):N0}us");
+            Console.WriteLine($"Counting frequencies took: {ToUsec(countFreqTicks):N0}us");
+            Console.WriteLine($"merging results took: {ToUsec(mergeDictsTicks):N0}us");
+        }
 #endif
     }
 
+    /// <summary>
+    /// This pre-processes the buffer so that all non ACGT chars are discarded from the target buffer on the one hand,
+    /// and while doing that translates the ACGT/acgt chars to 0-3 bytes
+    /// </summary>
+    /// <param name="buffer">The buffer</param>
+    /// <param name="len">the resulting length</param>
+    /// <returns>the new buffer that was allocated with <see cref="Marshal.AllocHGlobal(int)"/></returns>
+    static unsafe byte *PreprocessBuffer(byte[] buffer, out int len)
+    {
+        var p = (byte *) Marshal.AllocHGlobal(buffer.Length).ToPointer();
+        var tonum = stackalloc byte[256];
+        tonum['a'] = tonum['A'] = 0;
+        tonum['c'] = tonum['C'] = 1;
+        tonum['g'] = tonum['G'] = 2;
+        tonum['t'] = tonum['T'] = 3;
+        int i = 0;
+        int j = 0;
+        for (; i < buffer.Length; i++)
+        {
+            if (buffer[i] < 'a')
+                continue;
+            p[j++] = tonum[buffer[i]];
+        }
+
+        len = j;
+        return p;
+    }
+
+    static unsafe SuperDictionary<ulong, int> CountFrequency(byte *buffer, int length, int fragmentLength)
+    {
+        var dictionary = new SuperDictionary<ulong, int>();
+        var stop = buffer + length;
+        ulong rollingKey = 0;
+        ulong mask = 0;
+        int i;
+        // Preseed the rolling-key with the initial fragment - 1,
+        // so that the main loop keeps reading a single byte/value
+        // while also calculating the mask for the next loads
+        for (i = 0; i < fragmentLength - 1; i++) {
+            rollingKey <<= 2;
+            rollingKey |= *(buffer++);
+            mask = (mask << 2) + 0b11;
+        }
+
+        // The mask is actually one element larger
+        mask = (mask << 2) + 0b11;
+
+        // Read the rest of the data to the end
+        while (buffer < stop) {
+            rollingKey = ((rollingKey << 2) & mask) | *(buffer++);
+            dictionary[rollingKey]++;
+        }
+
+        return dictionary;
+    }
 
     static SuperDictionary<ulong, int> MergeDictionaries(SuperDictionary<ulong, int>[] splitDicts)
     {
-        var d = new SuperDictionary<ulong, int>();
-        foreach (var sd in splitDicts)
+        //var d = new SuperDictionary<ulong, int>();
+        var d = splitDicts[0];
+        for (var i = 1; i < splitDicts.Length; i++) {
+            var sd = splitDicts[i];
             foreach (var kvp in sd)
                 d[kvp.Key] += kvp.Value;
+        }
 
         return d;
     }
@@ -98,7 +251,7 @@ public class Program
         var keybytes = Encoding.ASCII.GetBytes(fragment.ToLower());
         for (var i = 0; i < keybytes.Length; i++) {
             key <<= 2;
-            key |= tonum[keybytes[i]];
+            key |= _tonum[keybytes[i]];
         }
 
         Console.WriteLine("{0}\t{1}",
@@ -110,7 +263,7 @@ public class Program
     {
         var items = new char[fragmentLength];
         for (var i = 0; i < fragmentLength; ++i) {
-            items[fragmentLength - i - 1] = tochar[key & 0x3];
+            items[fragmentLength - i - 1] = _tochar[key & 0x3];
             key >>= 2;
         }
         return new string(items);
@@ -122,33 +275,10 @@ public class Program
         ulong rollingKey = 0;
         for (var i = 0; i < key.Length; i++) {
             rollingKey <<= 2;
-            rollingKey |= tonum[key[i]];
+            rollingKey |= _tonum[key[i]];
         }
 
         return rollingKey;
-    }
-    static unsafe SuperDictionary<ulong, int> CountFrequency(byte *buffer, int length, int fragmentLength)
-    {
-        var dictionary = new SuperDictionary<ulong, int>();
-        ulong rollingKey = 0;
-        ulong mask = 0;
-        int cursor;
-        for (cursor = 0; cursor < fragmentLength - 1; cursor++) {
-            rollingKey <<= 2;
-            rollingKey |= tonum[buffer[cursor]];
-            mask = (mask << 2) + 3;
-        }
-        mask = (mask << 2) + 3;
-        var stop = length;
-        while (cursor < stop) {
-            byte cursorByte;
-            if ((cursorByte = buffer[cursor++]) < (byte)'a')
-                cursorByte = buffer[cursor++];
-            rollingKey = ((rollingKey << 2) & mask) | tonum[cursorByte];
-
-            dictionary[rollingKey]++;
-        }
-        return dictionary;
     }
 
     static byte[] GetBytesForThirdSequence(string[] args)
@@ -166,8 +296,9 @@ public class Program
             threeFound = (indexOfGreaterThan > -1 &&
                           buffer[indexOfGreaterThan + 1] == (byte)'T' &&
                           buffer[indexOfGreaterThan + 2] == (byte)'H');
-            if (threeFound)
-            {
+            if (!threeFound)
+				threepos += amountRead;
+			else {
                 threepos += indexOfGreaterThan;
                 threebuflen = threepos - 48;
                 threebuffer = new byte[threebuflen];
@@ -178,78 +309,23 @@ public class Program
                 Buffer.BlockCopy(buffer, indexOfFirstByteInThreeSequence, threebuffer, 0, tocopy);
                 buffer = null;
             }
-            else
-                threepos += amountRead;
         }
         var toread = threebuflen - tocopy;
         source.Read(threebuffer, tocopy, toread);
         return threebuffer;
     }
 
-    static byte[] tonum = new byte[256];
-    static char[] tochar = new char[4];
+    static readonly byte[] _tonum = new byte[256];
+    static readonly char[] _tochar = new char[4];
     static void PrepareLookups()
     {
-        tonum['a'] = 0;
-        tonum['c'] = 1;
-        tonum['g'] = 2;
-        tonum['t'] = 3;
-        tochar[0] = 'A';
-        tochar[1] = 'C';
-        tochar[2] = 'G';
-        tochar[3] = 'T';
+        _tonum['a'] = 0;
+        _tonum['c'] = 1;
+        _tonum['g'] = 2;
+        _tonum['t'] = 3;
+        _tochar[0] = 'A';
+        _tochar[1] = 'C';
+        _tochar[2] = 'G';
+        _tochar[3] = 'T';
     }
-#if VERIFY
-    static void AssertResults(SuperDictionary<ulong, int>[] dicts)
-    {
-        var expectedDicts = new[]
-        {
-            new Dictionary<string, int>()
-            {
-                {"T", 37688130},
-                {"G", 24693096},
-                {"C", 24749421},
-                {"A", 37869353},
-
-            },
-
-            new Dictionary<string, int>()
-            {
-                {"TT", 11364196},
-                {"TG", 7445440},
-                {"TC", 7463353},
-                {"TA", 11415139},
-                {"GT", 7446336},
-                {"GG", 4877909},
-                {"GC", 4888588},
-                {"GA", 7480263},
-                {"CT", 7464238},
-                {"CG", 4885915},
-                {"CC", 4896659},
-                {"CA", 7502608},
-                {"AT", 11413359},
-                {"AG", 7483832},
-                {"AC", 7500819},
-                {"AA", 11471342},
-            },
-
-            new Dictionary<string, int>() {{"GGT", 1471758}},
-            new Dictionary<string, int>() {{"GGTA", 446535}},
-            new Dictionary<string, int>() {{"GGTATT", 47336}},
-            new Dictionary<string, int>() {{"GGTATTTTAATT", 893}},
-            new Dictionary<string, int>() {{"GGTATTTTAATTTATAGT", 893}},
-        };
-
-
-        foreach (var t in expectedDicts.Zip(dicts, (e, d) => (e, d)))
-        foreach (var e in t.e)
-        {
-            var key = GetKeyAsUlong(e.Key);
-            var count = t.d[key];
-            if (e.Value != count)
-                Console.WriteLine($"Expected to see count {e.Value} for key \"{e.Key}\" but got {count} instead");
-
-        }
-    }
-#endif
 }

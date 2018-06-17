@@ -29,7 +29,6 @@ namespace shame
         int _freeList;
         int _freeCount;
 
-
         public SuperDictionary() : this(0, null) { }
 
         public SuperDictionary(int capacity) : this(capacity, null) { }
@@ -87,11 +86,7 @@ namespace shame
 
         public int Count => _count - _freeCount;
 
-        public ref TValue this[TKey key]
-        {
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get => ref TryInsert(key);
-        }
+        public ref TValue this[TKey key] => ref TryInsert(key);
 
         public void Add(TKey key, TValue value) => TryInsert(key) = value;
 
@@ -335,43 +330,41 @@ namespace shame
         public bool Remove(TKey key)
         {
             if (key == null)
-            {
                 ThrowHelper.ThrowArgumentNullException(ExceptionArgument.key);
-            }
 
-            if (_buckets != null)
+            if (_buckets == null)
+                return false;
+
+            var hashCode = key.GetHashCode() & 0x7FFFFFFF;
+            var bucket = hashCode % _buckets.Length;
+            var last = -1;
+            // Value in _buckets is 1-based
+            var i = _buckets[bucket] - 1;
+            while (i >= 0)
             {
-                var hashCode = key.GetHashCode() & 0x7FFFFFFF;
-                var bucket = hashCode % _buckets.Length;
-                var last = -1;
-                // Value in _buckets is 1-based
-                var i = _buckets[bucket] - 1;
-                while (i >= 0)
+                ref var entry = ref _entries[i];
+
+                if (entry.hashCode == hashCode && entry.key.Equals(key))
                 {
-                    ref var entry = ref _entries[i];
+                    // Value in _buckets is 1-based
+                    if (last < 0)
+                        _buckets[bucket] = entry.next + 1;
+                    else
+                        _entries[last].next = entry.next;
+                    entry.hashCode = -1;
+                    entry.next = _freeList;
 
-                    if (entry.hashCode == hashCode && entry.key.Equals(key))
-                    {
-                        // Value in _buckets is 1-based
-                        if (last < 0)
-                            _buckets[bucket] = entry.next + 1;
-                        else
-                            _entries[last].next = entry.next;
-                        entry.hashCode = -1;
-                        entry.next = _freeList;
-
-                        if (RuntimeHelpers.IsReferenceOrContainsReferences<TKey>())
-                            entry.key = default;
-                        if (RuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
-                            entry.value = default;
-                        _freeList = i;
-                        _freeCount++;
-                        return true;
-                    }
-
-                    last = i;
-                    i = entry.next;
+                    if (RuntimeHelpers.IsReferenceOrContainsReferences<TKey>())
+                        entry.key = default;
+                    if (RuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
+                        entry.value = default;
+                    _freeList = i;
+                    _freeCount++;
+                    return true;
                 }
+
+                last = i;
+                i = entry.next;
             }
             return false;
         }
