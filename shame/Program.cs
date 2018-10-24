@@ -12,8 +12,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
-using shame;
-
+using Microsoft.Experimental.Collections;
 public unsafe class Program
 {
     public static unsafe void Main(string[] args)
@@ -33,7 +32,7 @@ public unsafe class Program
 #if PROFILE
         preProcessTicks = Stopwatch.GetTimestamp();
 #endif
-        var procs = Environment.ProcessorCount / 2;
+        var procs = Environment.ProcessorCount;
 
         var bufferLengths = Enumerable.Repeat(len / procs, procs).ToArray();
         bufferLengths[procs - 1] += len % procs;
@@ -90,7 +89,7 @@ public unsafe class Program
 #if VERIFY
         AssertResults(dicts);
 
-        static void AssertResults(SuperDictionary<ulong, int>[] dicts)
+        static void AssertResults(RefDictionary<ulong, int>[] dicts)
         {
             var expectedDicts = new[]
             {
@@ -193,9 +192,9 @@ public unsafe class Program
         return p;
     }
 
-    static unsafe SuperDictionary<ulong, int> CountFrequency(byte *buffer, int length, int fragmentLength)
+    static unsafe RefDictionary<ulong, int> CountFrequency(byte *buffer, int length, int fragmentLength)
     {
-        var dictionary = new SuperDictionary<ulong, int>();
+        var dictionary = new RefDictionary<ulong, int>();
         var stop = buffer + length;
         ulong rollingKey = 0;
         ulong mask = 0;
@@ -221,7 +220,7 @@ public unsafe class Program
         return dictionary;
     }
 
-    static SuperDictionary<ulong, int> MergeDictionaries(SuperDictionary<ulong, int>[] splitDicts)
+    static RefDictionary<ulong, int> MergeDictionaries(RefDictionary<ulong, int>[] splitDicts)
     {
         //var d = new SuperDictionary<ulong, int>();
         var d = splitDicts[0];
@@ -234,7 +233,7 @@ public unsafe class Program
         return d;
     }
 
-    static void WriteFrequencies(SuperDictionary<ulong, int> freq, int buflen, int fragmentLength)
+    static void WriteFrequencies(RefDictionary<ulong, int> freq, int buflen, int fragmentLength)
     {
         var percent = 100.0 / (buflen - fragmentLength + 1);
         foreach (var line in (from e in freq
@@ -245,7 +244,7 @@ public unsafe class Program
         Console.WriteLine();
     }
 
-    static void WriteCount(SuperDictionary<ulong, int> dictionary, string fragment)
+    static void WriteCount(RefDictionary<ulong, int> dictionary, string fragment)
     {
         ulong key = 0;
         var keybytes = Encoding.ASCII.GetBytes(fragment.ToLower());
@@ -254,8 +253,9 @@ public unsafe class Program
             key |= _tonum[keybytes[i]];
         }
 
+
         Console.WriteLine("{0}\t{1}",
-            dictionary.TryGetValue(key, out var w) ? w : 0,
+            dictionary.GetValueOrDefault(key),
             fragment);
     }
 
