@@ -34,7 +34,7 @@ or (this works better with profilers of sorts):
 # how / what
 
 This submission does a few things "better", namely:
-* [SuperDictionary.cs](https://github.com/damageboy/shame/blob/master/shame/SuperDictionary.cs): a hacked up version of the coreclr [`Dictionary<T,K>`](https://github.com/dotnet/coreclr/blob/master/src/mscorlib/src/System/Collections/Generic/Dictionary.cs) with the rough following mods:
+* [RefDictionary.cs](https://github.com/AnthonyLloyd/corefxlab/blob/master/src/Microsoft.Experimental.Collections/Microsoft/Collections/Extensions/RefDictionary.cs): a hacked up version of the coreclr [`Dictionary<T,K>`](https://github.com/dotnet/coreclr/blob/master/src/mscorlib/src/System/Collections/Generic/Dictionary.cs) with the rough following mods:
   * ref-return based `this[TKey key]` operator
   * remove the concurrent use detection logic
   * constrain `TKey` / `TValue` to implement `IEquatable<T>`, eliminating `EqualityComparer<T>.Default`
